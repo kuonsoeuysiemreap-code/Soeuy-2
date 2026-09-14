@@ -1,0 +1,6 @@
+{
+  "name": "Room & Accounting Management Dashboard",
+  "description": "Comprehensive hotel PMS featuring Tape Chart rack view, guest bill details, Night Audit with role-controlled day-by-day accommodation charge posting, and accounting ledgers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
