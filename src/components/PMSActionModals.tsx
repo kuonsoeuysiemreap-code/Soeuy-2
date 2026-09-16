@@ -26,9 +26,12 @@ import {
   AlertTriangle,
   Layers,
   Clock,
-  Settings
+  Settings,
+  Receipt,
+  Wallet,
+  Check
 } from 'lucide-react';
-import { formatCurrency, playChime, formatFolioDate } from '../utils/helpers';
+import { formatCurrency, playChime, formatFolioDate, getRoomFolioData } from '../utils/helpers';
 
 // ----------------------------------------------------
 // 1. IN-HOUSE GUEST DIRECTORY MODAL
@@ -592,11 +595,23 @@ export const NightAuditModal: React.FC<NightAuditModalProps> = ({
     return true;
   });
 
+  // Policy Rule: Should settle payment for all before run night audit of the day checking out guest
+  const [requireSettleCheckoutRooms, setRequireSettleCheckoutRooms] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('winhms_night_audit_require_settle_checkouts');
+      if (saved !== null) return saved === 'true';
+    } catch (e) {}
+    return true;
+  });
+
+  const [settlementVersion, setSettlementVersion] = useState<number>(0);
+
   const [isRoleConfigModalOpen, setIsRoleConfigModalOpen] = useState(false);
   const [tempAllowedRoles, setTempAllowedRoles] = useState<string[]>(allowedRoles);
   const [tempAutoPost, setTempAutoPost] = useState<boolean>(autoPostCharges);
   const [tempTargetSplit, setTempTargetSplit] = useState<number>(targetSplit);
   const [tempRequireCheckInAllRooms, setTempRequireCheckInAllRooms] = useState<boolean>(requireCheckInAllRooms);
+  const [tempRequireSettleCheckoutRooms, setTempRequireSettleCheckoutRooms] = useState<boolean>(requireSettleCheckoutRooms);
 
   // Compute rooms with pending arrivals on or before businessDate that must be checked in
   const pendingCheckInRooms = useMemo(() => {
@@ -611,8 +626,79 @@ export const NightAuditModal: React.FC<NightAuditModalProps> = ({
     });
   }, [rooms, businessDate]);
 
+  // Compute occupied rooms due for checkout on or before businessDate that have unsettled balance
+  const unsettledDepartingRooms = useMemo(() => {
+    return rooms
+      .filter((r) => {
+        if (r.status !== 'occupied' || !r.guestName) return false;
+        const isCheckingOutToday = r.checkOutDate ? r.checkOutDate <= businessDate : false;
+        if (!isCheckingOutToday) return false;
+        const folio = getRoomFolioData(r.roomNumber, r.guestName);
+        return folio.balance > 0.01;
+      })
+      .map((r) => {
+        const folio = getRoomFolioData(r.roomNumber, r.guestName);
+        return {
+          room: r,
+          balance: folio.balance,
+          guestName: r.guestName!,
+          checkInDate: r.checkInDate || '',
+          checkOutDate: r.checkOutDate || '',
+        };
+      });
+  }, [rooms, businessDate, settlementVersion]);
+
   const hasPendingCheckIns = pendingCheckInRooms.length > 0;
   const isAuditBlockedByCheckInRule = requireCheckInAllRooms && hasPendingCheckIns;
+
+  const hasUnsettledDepartures = unsettledDepartingRooms.length > 0;
+  const isAuditBlockedBySettlementRule = requireSettleCheckoutRooms && hasUnsettledDepartures;
+  const isAuditBlocked = isAuditBlockedByCheckInRule || isAuditBlockedBySettlementRule;
+
+  // Quick settle all checking out guests with outstanding balance
+  const handleQuickSettleAllDepartures = () => {
+    unsettledDepartingRooms.forEach((u) => {
+      try {
+        const cleanGuestKey = u.guestName.replace(/[^a-zA-Z0-9]/g, '_');
+        const storageKey = `winhms_bill_${u.room.roomNumber}_${cleanGuestKey}`;
+        const existingRaw = localStorage.getItem(storageKey);
+        let billData = existingRaw ? JSON.parse(existingRaw) : null;
+        if (!billData) {
+          billData = {
+            charges: [{
+              id: `chg-${Date.now()}`,
+              date: formatFolioDate(u.checkInDate),
+              description: 'Room Charge',
+              amount: u.room.pricePerNight,
+              split: 1,
+              time: '14:00',
+              reference: `CHK-${u.room.roomNumber}`,
+            }],
+            payments: [],
+          };
+        }
+        billData.payments = billData.payments || [];
+        billData.payments.push({
+          id: `pay-settle-${Date.now()}-${u.room.roomNumber}`,
+          date: formatFolioDate(businessDate),
+          time: '12:00',
+          method: 'Cash',
+          amount: u.balance,
+          split: 1,
+          reference: `AUDIT-SETTLE-${u.room.roomNumber}`,
+        });
+        localStorage.setItem(storageKey, JSON.stringify(billData));
+      } catch (e) {
+        console.error('Error settling departure folio:', e);
+      }
+    });
+    setSettlementVersion((v) => v + 1);
+    if (settings.soundEffects) playChime();
+    setAuditLog((prev) => [
+      ...prev,
+      `✓ Room Role Action: Settled payment in full for ${unsettledDepartingRooms.length} checking out guest(s) of the day.`,
+    ]);
+  };
 
   // Current active staff operator role
   const activeUserRole = currentUser?.role || 'Super Admin';
@@ -660,11 +746,13 @@ export const NightAuditModal: React.FC<NightAuditModalProps> = ({
     setAutoPostCharges(tempAutoPost);
     setTargetSplit(tempTargetSplit);
     setRequireCheckInAllRooms(tempRequireCheckInAllRooms);
+    setRequireSettleCheckoutRooms(tempRequireSettleCheckoutRooms);
     try {
       localStorage.setItem('winhms_night_audit_allowed_roles', JSON.stringify(tempAllowedRoles));
       localStorage.setItem('winhms_night_audit_auto_post_charges', String(tempAutoPost));
       localStorage.setItem('winhms_night_audit_target_split', String(tempTargetSplit));
       localStorage.setItem('winhms_night_audit_require_checkin_all_rooms', String(tempRequireCheckInAllRooms));
+      localStorage.setItem('winhms_night_audit_require_settle_checkouts', String(tempRequireSettleCheckoutRooms));
     } catch (e) {}
     setIsRoleConfigModalOpen(false);
     if (settings.soundEffects) playChime();
@@ -699,10 +787,21 @@ export const NightAuditModal: React.FC<NightAuditModalProps> = ({
     // Hard Guard Clause: Enforce room role rule that all pending arrivals must be checked in from chart before running night audit
     if (isAuditBlockedByCheckInRule) {
       setAuditLog([
-        `⚠️ Night Audit BLOCKED: Pre-Night Audit Rule Enforcement.`,
-        `Policy Mandate: All rooms scheduled for arrival on or before ${closedDate} must be checked in from Tape Chart before running Night Audit.`,
+        `⚠️ Night Audit BLOCKED: Pre-Night Audit Rule Enforcement (Room Role).`,
+        `Policy Mandate: Must be check in before run night audit. All rooms scheduled for arrival on or before ${closedDate} must be checked in first.`,
         `Pending Arrivals (${pendingCheckInRooms.length}): ${pendingCheckInRooms.map((r) => `#${r.roomNumber}`).join(', ')}.`,
         `Action Required: Check in all rooms from the Tape Chart first, or click "Check In All Rooms from Chart Now" to resolve immediately.`,
+      ]);
+      return;
+    }
+
+    // Hard Guard Clause: Enforce room role rule that all checking out guests of the day must be settled before running night audit
+    if (isAuditBlockedBySettlementRule) {
+      setAuditLog([
+        `⚠️ Night Audit BLOCKED: Pre-Night Audit Rule Enforcement (Room Role).`,
+        `Policy Mandate: Should be settle payment for all before run night audit of the day checking out guest (${closedDate}).`,
+        `Unsettled Checking Out Guests (${unsettledDepartingRooms.length}): ${unsettledDepartingRooms.map((u) => `Room #${u.room.roomNumber} (${u.guestName} - Due: $${u.balance.toFixed(2)})`).join(', ')}.`,
+        `Action Required: Settle payments for all checking out guests of the day prior to running night audit, or click "Settle All Checking Out Guests Now".`,
       ]);
       return;
     }
@@ -923,6 +1022,98 @@ export const NightAuditModal: React.FC<NightAuditModalProps> = ({
                   </button>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* PRE-NIGHT AUDIT ROOM ROLE MANDATE: Settle payment for all before run night audit of the day checking out guest */}
+          {hasUnsettledDepartures && requireSettleCheckoutRooms && (
+            <div className="bg-rose-50 border-2 border-rose-400 rounded-xl p-3.5 text-rose-950 space-y-2.5 shadow-xs animate-in fade-in duration-200">
+              <div className="flex items-start justify-between gap-2.5">
+                <div className="flex items-start gap-2.5">
+                  <div className="p-1.5 rounded-lg bg-rose-100 border border-rose-300 text-rose-800 shrink-0 mt-0.5">
+                    <Receipt className="w-4 h-4 text-rose-700" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="font-black text-xs text-rose-950">
+                        Pre-Audit Room Role Mandate: Settle Payment for Checking Out Guests
+                      </h4>
+                      <span className="bg-rose-200/90 text-rose-900 border border-rose-400 font-mono text-[10px] font-black px-1.5 py-0.2 rounded-full">
+                        {unsettledDepartingRooms.length} Due Checkout{unsettledDepartingRooms.length > 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-rose-900 mt-0.5 leading-relaxed">
+                      Hotel system policy requires: <strong>Should be settle payment for all before run night audit of the day checking out guest</strong> ({closedDate}). All departing guests must be settled to a zero balance ($0.00) before night audit can run.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* List of unsettled departing rooms */}
+              <div className="bg-white/90 border border-rose-300 rounded-lg p-2 max-h-32 overflow-y-auto space-y-1.5">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-rose-900 flex items-center justify-between">
+                  <span>Checking Out Guests with Unsettled Balance:</span>
+                  <span className="font-mono text-[9px] text-rose-700">Must settle to $0.00</span>
+                </div>
+                <div className="space-y-1">
+                  {unsettledDepartingRooms.map((u) => (
+                    <div
+                      key={u.room.id}
+                      className="flex items-center justify-between gap-2 bg-rose-100/60 border border-rose-300 px-2 py-1 rounded text-[11px]"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="font-bold text-rose-950 font-mono shrink-0">Room #{u.room.roomNumber}:</span>
+                        <span className="text-neutral-900 font-medium truncate">{u.guestName}</span>
+                        <span className="text-[10px] text-neutral-500 shrink-0 font-mono">(Dep: {u.checkOutDate})</span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="font-mono font-bold text-rose-700 bg-white px-1.5 py-0.5 rounded border border-rose-300 text-[11px]">
+                          Due: ${u.balance.toFixed(2)}
+                        </span>
+                        {onOpenBillDetails && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenBillDetails(u.room, u.guestName)}
+                            className="px-2 py-0.5 bg-white hover:bg-neutral-100 border border-rose-400 rounded text-[10px] font-bold text-rose-900 transition-colors shadow-2xs cursor-pointer"
+                            title="Open Guest Folio Bill Detail & Settle"
+                          >
+                            Open Bill
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Action row to Quick Settle All right now */}
+              <div className="flex items-center justify-between gap-2 pt-1 border-t border-rose-300/70">
+                <span className="text-[10.5px] text-rose-800 italic">
+                  Click below to settle all pending departure balances and immediately unlock Night Audit:
+                </span>
+                <button
+                  type="button"
+                  onClick={handleQuickSettleAllDepartures}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 bg-rose-700 hover:bg-rose-800 active:bg-rose-900 text-white font-bold rounded-lg text-xs shadow-xs transition-colors cursor-pointer"
+                >
+                  <Wallet className="w-3.5 h-3.5 text-rose-200" />
+                  <span>Settle All Checking Out Guests Now</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Status badge when all Room Roles are satisfied */}
+          {!hasPendingCheckIns && !hasUnsettledDepartures && (
+            <div className="bg-emerald-50 border border-emerald-300 rounded-lg px-3 py-1.5 flex items-center justify-between text-xs text-emerald-900">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span className="font-bold">Room Role Mandates Satisfied:</span>
+                <span className="text-emerald-700 text-[11px]">All arrivals checked in & checking out guests settled ($0.00).</span>
+              </div>
+              <span className="bg-emerald-200 text-emerald-900 font-mono text-[10px] font-bold px-1.5 py-0.2 rounded">
+                Audit Ready
+              </span>
             </div>
           )}
 
@@ -1230,16 +1421,18 @@ export const NightAuditModal: React.FC<NightAuditModalProps> = ({
                 <button
                   type="button"
                   onClick={handleRunAudit}
-                  disabled={isRunning || !isUserAuthorized || isAuditBlockedByCheckInRule}
+                  disabled={isRunning || !isUserAuthorized || isAuditBlocked}
                   title={
                     isAuditBlockedByCheckInRule
-                      ? `Night Audit blocked: ${pendingCheckInRooms.length} room arrival(s) must be checked in from Tape Chart first`
+                      ? `Night Audit blocked: ${pendingCheckInRooms.length} room arrival(s) must be checked in before run night audit`
+                      : isAuditBlockedBySettlementRule
+                      ? `Night Audit blocked: ${unsettledDepartingRooms.length} checking out guest(s) must settle payment before run night audit`
                       : !isUserAuthorized
                       ? 'Unauthorized role'
                       : 'Execute Night Audit'
                   }
                   className={`flex items-center gap-1.5 px-5 py-1.5 font-bold text-xs rounded-lg shadow-md transition-all ${
-                    isAuditBlockedByCheckInRule || !isUserAuthorized
+                    isAuditBlocked || !isUserAuthorized
                       ? 'bg-neutral-300 text-neutral-500 cursor-not-allowed border border-neutral-400 opacity-80'
                       : 'bg-blue-600 hover:bg-blue-700 text-white cursor-pointer active:scale-95 hover:bg-blue-500'
                   }`}
@@ -1250,6 +1443,8 @@ export const NightAuditModal: React.FC<NightAuditModalProps> = ({
                       ? 'Posting Folio Balances...'
                       : isAuditBlockedByCheckInRule
                       ? `Check In All Rooms First (${pendingCheckInRooms.length} Pending)`
+                      : isAuditBlockedBySettlementRule
+                      ? `Settle Checkout Guests First (${unsettledDepartingRooms.length} Due)`
                       : `Run Night Audit & Post Folios (${daysCount}D)`}
                   </span>
                 </button>
@@ -1416,7 +1611,7 @@ export const NightAuditModal: React.FC<NightAuditModalProps> = ({
                     <div>
                       <div className="flex items-center gap-1.5">
                         <span className="font-bold text-neutral-900">
-                          Pre-Audit Mandate: All Rooms Must Be Checked In
+                          Pre-Audit Mandate: Must Be Checked In Before Run Night Audit
                         </span>
                         <span className="text-[9px] bg-amber-200 text-amber-900 font-bold px-1 rounded-2xs uppercase">
                           Policy
@@ -1424,6 +1619,31 @@ export const NightAuditModal: React.FC<NightAuditModalProps> = ({
                       </div>
                       <span className="text-[10px] text-neutral-600 block leading-tight mt-0.5">
                         Requires all rooms scheduled for arrival from the tape chart to be checked in before running Night Audit. Locks the audit button while pending arrivals exist.
+                      </span>
+                    </div>
+                  </label>
+                </div>
+
+                {/* Pre-Night Audit Mandate: Settle Payment for Checking Out Guests of the Day */}
+                <div className="pt-2 border-t border-neutral-200">
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={tempRequireSettleCheckoutRooms}
+                      onChange={(e) => setTempRequireSettleCheckoutRooms(e.target.checked)}
+                      className="mt-0.5 rounded border-neutral-400 text-rose-600 focus:ring-rose-500 cursor-pointer"
+                    />
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-neutral-900">
+                          Pre-Audit Mandate: Settle Payment for Day Checking Out Guests
+                        </span>
+                        <span className="text-[9px] bg-rose-200 text-rose-900 font-bold px-1 rounded-2xs uppercase">
+                          Room Role
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-neutral-600 block leading-tight mt-0.5">
+                        Should be settle payment for all before run night audit of the day checking out guest. Locks the audit button until all checking out guests reach zero balance ($0.00).
                       </span>
                     </div>
                   </label>

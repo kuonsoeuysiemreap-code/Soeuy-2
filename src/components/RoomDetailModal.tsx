@@ -15,7 +15,8 @@ import {
   Ban, 
   ShieldAlert, 
   Crown, 
-  Trash2 
+  Trash2,
+  History 
 } from 'lucide-react';
 import { Room, RoomStatus, CleaningStatus, UserSettings } from '../types';
 import { formatCurrency, getAccentClasses, getRoomStatusBadge, getCleaningStatusBadge, playChime } from '../utils/helpers';
@@ -51,6 +52,11 @@ export const RoomDetailModal: React.FC<RoomDetailModalProps> = ({
   onCancelReservation,
 }) => {
   const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false);
+  const [activeTab, setActiveTab] = React.useState<'details' | 'history'>('details');
+
+  React.useEffect(() => {
+    setActiveTab('details');
+  }, [room?.id, isOpen]);
 
   if (!isOpen || !room) return null;
 
@@ -147,10 +153,164 @@ export const RoomDetailModal: React.FC<RoomDetailModalProps> = ({
           </div>
         </div>
 
+        {/* Sub Navigation: Details vs History of Previous Stays */}
+        <div className="flex items-center border-b border-neutral-800 bg-neutral-950/40 px-6">
+          <button
+            type="button"
+            onClick={() => setActiveTab('details')}
+            className={`py-2.5 px-3 text-xs font-bold border-b-2 transition-all cursor-pointer ${
+              activeTab === 'details'
+                ? 'border-blue-500 text-blue-400'
+                : 'border-transparent text-neutral-400 hover:text-neutral-200'
+            }`}
+          >
+            Room Overview & Current State
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('history')}
+            className={`flex items-center gap-1.5 py-2.5 px-3 text-xs font-bold border-b-2 transition-all cursor-pointer ${
+              activeTab === 'history'
+                ? 'border-purple-500 text-purple-400'
+                : 'border-transparent text-neutral-400 hover:text-neutral-200'
+            }`}
+          >
+            <History className="h-3.5 w-3.5 text-purple-400" />
+            <span>History of Previous ({room.history?.length || 0})</span>
+          </button>
+        </div>
+
         {/* Content Body */}
         <div className="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
-          
-          {/* Out of Service Banner Alert */}
+          {activeTab === 'history' ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                    <History className="h-4 w-4 text-purple-400" />
+                    Previous Stay History for Room #{room.roomNumber}
+                  </h4>
+                  <p className="text-xs text-neutral-400 mt-0.5">
+                    Past guest stays, settlements, duration, and archived folio records.
+                  </p>
+                </div>
+                <span className="text-xs font-mono font-bold px-2.5 py-0.5 rounded-full bg-purple-950/80 text-purple-300 border border-purple-500/30">
+                  {room.history?.length || 0} Recorded Stays
+                </span>
+              </div>
+
+              {(!room.history || room.history.length === 0) ? (
+                <div className="p-8 text-center bg-neutral-950/40 rounded-xl border border-neutral-800 space-y-2">
+                  <History className="h-8 w-8 text-neutral-600 mx-auto" />
+                  <p className="text-xs text-neutral-400 font-semibold">No previous stay records on file for Room #{room.roomNumber}.</p>
+                  <p className="text-[11px] text-neutral-500">When departing guests check out or settle, their historical records will appear here.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {room.history.map((entry) => {
+                    const inDate = new Date(entry.checkInDate);
+                    const outDate = new Date(entry.checkOutDate);
+                    const nights = Math.max(1, Math.round((outDate.getTime() - inDate.getTime()) / (1000 * 60 * 60 * 24)));
+                    return (
+                      <div
+                        key={entry.id}
+                        className="p-4 rounded-xl bg-neutral-950/60 border border-neutral-800/90 hover:border-neutral-700 transition-all space-y-3"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-lg bg-purple-950/60 border border-purple-500/30 flex items-center justify-center text-purple-300 font-bold text-xs">
+                              {entry.guestName.charAt(0)}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-white text-sm">{entry.guestName}</span>
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-950/70 text-emerald-300 border border-emerald-500/30">
+                                  {entry.status === 'checked_out' ? 'Checked Out' : 'Completed'}
+                                </span>
+                                {entry.folioNumber && (
+                                  <span className="font-mono text-[10px] text-neutral-500">
+                                    {entry.folioNumber}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-3 text-xs text-neutral-400 mt-0.5">
+                                {entry.guestEmail && <span>{entry.guestEmail}</span>}
+                                {entry.guestPhone && <span>{entry.guestPhone}</span>}
+                              </div>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => onViewInvoiceForRoom(room, entry.guestName)}
+                            className="flex items-center gap-1.5 px-3 py-1 rounded-lg border border-amber-500/40 bg-amber-950/30 hover:bg-amber-950/70 text-amber-300 text-xs font-semibold cursor-pointer transition-all"
+                          >
+                            <Receipt className="h-3.5 w-3.5 text-amber-400" />
+                            <span>View Guest Folio</span>
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-neutral-800/60 text-xs">
+                          <div>
+                            <span className="text-[10.5px] text-neutral-500 block">Stay Period</span>
+                            <span className="font-mono text-neutral-200 font-medium">
+                              {entry.checkInDate} → {entry.checkOutDate}
+                            </span>
+                            <span className="text-[10px] text-neutral-400 block font-mono">({nights} {nights === 1 ? 'Night' : 'Nights'})</span>
+                          </div>
+                          <div>
+                            <span className="text-[10.5px] text-neutral-500 block">Rate / Night</span>
+                            <span className="font-mono text-neutral-200 font-medium">
+                              {formatCurrency(entry.rate || room.pricePerNight, settings.currency.symbol)}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-[10.5px] text-neutral-500 block">Total Settlement</span>
+                            <span className="font-mono text-emerald-400 font-bold">
+                              {formatCurrency(entry.totalAmount || (nights * (entry.rate || room.pricePerNight)), settings.currency.symbol)}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-[10.5px] text-neutral-500 block">Payment Mode</span>
+                            <span className="text-neutral-300 font-medium">
+                              {entry.paymentMethod || 'Credit Card'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {entry.notes && (
+                          <p className="text-[11px] text-neutral-400 italic bg-neutral-900/60 p-2 rounded-lg border border-neutral-800/50">
+                            &ldquo;{entry.notes}&rdquo;
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              {/* Quick History Banner on Overview Tab */}
+              {room.history && room.history.length > 0 && (
+                <div className="flex items-center justify-between p-3 rounded-xl bg-purple-950/20 border border-purple-500/30 text-xs">
+                  <div className="flex items-center gap-2">
+                    <History className="h-4 w-4 text-purple-400" />
+                    <span className="text-neutral-300">
+                      Room #{room.roomNumber} has <strong className="text-white font-mono">{room.history.length}</strong> previous stay record{room.history.length > 1 ? 's' : ''} on file.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('history')}
+                    className="px-2.5 py-1 rounded-lg bg-purple-900/60 hover:bg-purple-800 text-purple-200 font-bold text-[11px] cursor-pointer"
+                  >
+                    View Previous History →
+                  </button>
+                </div>
+              )}
+
+              {/* Out of Service Banner Alert */}
           {room.status === 'out_of_service' && (
             <div className="rounded-2xl border border-red-500/40 bg-red-950/20 p-4 space-y-2">
               <div className="flex items-center justify-between">
@@ -574,6 +734,8 @@ export const RoomDetailModal: React.FC<RoomDetailModalProps> = ({
               </button>
             </div>
           </div>
+            </>
+          )}
         </div>
 
         {/* Footer Actions */}

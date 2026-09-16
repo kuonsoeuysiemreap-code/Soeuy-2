@@ -231,7 +231,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     }
 
     if (targetConflict) {
-      setCleanError(`Rule Violation - Cannot Accept Booking: Room #${targetConflict.roomNumber} (${targetConflict.type}) has ${targetConflict.isNextBooking ? 'an upcoming next booking reserved for' : 'an active stay by'} ${targetConflict.guestName} (${targetConflict.checkInDate} to ${targetConflict.checkOutDate}). Policy strictly prohibits accepting reservations on booked dates. Please change to an available room.`);
+      setCleanError(`Room Role Policy: Can’t duplicate reservation in same room and time effect! Room #${targetConflict.roomNumber} (${targetConflict.type}) has ${targetConflict.isNextBooking ? 'an upcoming reservation for' : 'an active stay by'} ${targetConflict.guestName} (${targetConflict.checkInDate} to ${targetConflict.checkOutDate}). Please change to an available room or dates.`);
       return;
     }
 
@@ -653,11 +653,11 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                 <div className="space-y-0.5">
                   <div className="text-sm font-black text-white tracking-wide">
                     {targetConflict.isNextBooking 
-                      ? `Booking Rejected: Upcoming Next Booking on Room #${targetConflict.roomNumber}`
-                      : `Booking Rejected: Room #${targetConflict.roomNumber} is Already Booked`}
+                      ? `Room Role Violation: Upcoming Next Booking on Room #${targetConflict.roomNumber}`
+                      : `Room Role Violation: Room #${targetConflict.roomNumber} is Already Booked`}
                   </div>
                   <div className="text-[12px] text-red-200/90 font-medium">
-                    Hotel Policy: This booking <strong>cannot be accepted</strong> while there is a next/existing booking for this period. <strong>You must change room to accept this reservation.</strong>
+                    Room Role Policy: <strong>Can’t duplicate reservation in same room and time effect.</strong> You must change room or adjust dates to accept this reservation.
                   </div>
                 </div>
               </div>
@@ -1098,7 +1098,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
               {isBeforeBusinessDate
                 ? 'Check-In Date Prior to Business Date'
                 : targetConflict 
-                ? 'Double Booking Conflict (Resolve Above)' 
+                ? 'Can’t Duplicate Reservation in Same Room & Time' 
                 : (bookingType === 'reservation' || checkInDate > businessDate)
                 ? 'Confirm Room Reserve Booking (GstBlk)'
                 : 'Confirm & Complete Check-In'}

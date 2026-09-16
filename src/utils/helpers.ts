@@ -1,4 +1,4 @@
-import { AccentColor, RoomStatus, CleaningStatus, PaymentStatus } from '../types';
+import { AccentColor, RoomStatus, CleaningStatus, PaymentStatus, Room } from '../types';
 
 export const formatCurrency = (amount: number | undefined | null, symbolOrCurrency: string | { symbol?: string; code?: string } = '$', _code: string = 'USD'): string => {
   const num = typeof amount === 'number' && !isNaN(amount) ? amount : (Number(amount) || 0);
@@ -230,4 +230,136 @@ export const formatFolioDate = (rawDate: string | undefined): string => {
   }
 
   return trimmed;
+};
+
+export interface RoomConflictResult {
+  conflictingGuest: string;
+  checkInDate: string;
+  checkOutDate: string;
+  isCurrentStay: boolean;
+  resId?: string;
+  status: string;
+}
+
+export const normalizeToIsoDate = (dateStr: string | undefined): string => {
+  if (!dateStr) return '';
+  const trimmed = dateStr.trim();
+  // Match YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  // Match DD/MM/YY or DD/MM/YYYY or DD-MM-YYYY
+  const dmyMatch = trimmed.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
+  if (dmyMatch) {
+    const d = dmyMatch[1].padStart(2, '0');
+    const m = dmyMatch[2].padStart(2, '0');
+    let y = dmyMatch[3];
+    if (y.length === 2) y = `20${y}`;
+    return `${y}-${m}-${d}`;
+  }
+  // Match DD-MMM-YY (e.g. 26-Aug-26)
+  const dmmMatch = trimmed.match(/^(\d{1,2})[-/ ]?([A-Za-z]{3})[-/ ]?(\d{2,4})$/);
+  if (dmmMatch) {
+    const d = dmmMatch[1].padStart(2, '0');
+    const monStr = dmmMatch[2].toLowerCase();
+    const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+    const mIdx = months.indexOf(monStr);
+    const m = mIdx >= 0 ? String(mIdx + 1).padStart(2, '0') : '08';
+    let y = dmmMatch[3];
+    if (y.length === 2) y = `20${y}`;
+    return `${y}-${m}-${d}`;
+  }
+  return trimmed;
+};
+
+export const checkDatesOverlap = (in1: string, out1: string, in2: string, out2: string): boolean => {
+  const normIn1 = normalizeToIsoDate(in1);
+  const normOut1 = normalizeToIsoDate(out1);
+  const normIn2 = normalizeToIsoDate(in2);
+  const normOut2 = normalizeToIsoDate(out2);
+  if (!normIn1 || !normOut1 || !normIn2 || !normOut2) return false;
+  return normIn1 < normOut2 && normOut1 > normIn2;
+};
+
+export const getRoomConflictDetail = (
+  room: Room,
+  checkIn: string,
+  checkOut: string,
+  excludeResId?: string
+): RoomConflictResult | null => {
+  const normIn = normalizeToIsoDate(checkIn);
+  const normOut = normalizeToIsoDate(checkOut);
+  if (!normIn || !normOut) return null;
+
+  // 1. Check active in-house stay
+  if (
+    (room.status === 'occupied' || room.status === 'reserved') &&
+    room.checkInDate &&
+    room.checkOutDate
+  ) {
+    const isExcludedStay = excludeResId && (excludeResId === `stay-${room.id}` || excludeResId === `res-${room.id}`);
+    if (!isExcludedStay && checkDatesOverlap(normIn, normOut, room.checkInDate, room.checkOutDate)) {
+      return {
+        conflictingGuest: room.guestName || 'In-House Guest',
+        checkInDate: room.checkInDate,
+        checkOutDate: room.checkOutDate,
+        isCurrentStay: room.status === 'occupied',
+        resId: `stay-${room.id}`,
+        status: room.status,
+      };
+    }
+  }
+
+  // 2. Check future reservations on this room
+  if (room.futureReservations && room.futureReservations.length > 0) {
+    for (const fut of room.futureReservations) {
+      if (excludeResId && fut.id === excludeResId) continue;
+      if (fut.checkInDate && fut.checkOutDate) {
+        if (checkDatesOverlap(normIn, normOut, fut.checkInDate, fut.checkOutDate)) {
+          return {
+            conflictingGuest: fut.guestName,
+            checkInDate: fut.checkInDate,
+            checkOutDate: fut.checkOutDate,
+            isCurrentStay: false,
+            resId: fut.id,
+            status: fut.status || 'reserved',
+          };
+        }
+      }
+    }
+  }
+
+  return null;
+};
+
+export const getRoomFolioData = (roomNumber: string, guestName?: string) => {
+  const cleanName = (guestName || '').replace(/[^a-zA-Z0-9]/g, '_');
+  const storageKey = `winhms_bill_${roomNumber}_${cleanName}`;
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      const charges = Array.isArray(parsed.charges) ? parsed.charges : [];
+      const validCharges = charges.filter((c: any) => c && c.id && !/^c-(?:[1-9]|1[0-8])(?:-pay)?$/.test(c.id));
+      const totalCharges = validCharges.filter((c: any) => c.amount > 0).reduce((acc: number, c: any) => acc + c.amount, 0);
+      const totalCredits = validCharges.filter((c: any) => c.amount < 0).reduce((acc: number, c: any) => acc + Math.abs(c.amount), 0);
+      const balance = Math.round((totalCharges - totalCredits) * 100) / 100;
+      return {
+        storageKey,
+        balance,
+        totalCharges,
+        totalCredits,
+        charges: validCharges,
+        isSettled: balance <= 0.01,
+        hasFolio: validCharges.length > 0,
+      };
+    }
+  } catch (e) {}
+  return {
+    storageKey,
+    balance: 0,
+    totalCharges: 0,
+    totalCredits: 0,
+    charges: [],
+    isSettled: true,
+    hasFolio: false,
+  };
 };

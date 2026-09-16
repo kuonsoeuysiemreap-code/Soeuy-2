@@ -115,6 +115,16 @@
     box-shadow: none !important;
     border: none !important;
     background: #ffffff !important;
+    box-sizing: border-box !important;
+  }
+  #winhms-printable-folio table {
+    page-break-inside: auto;
+  }
+  #winhms-printable-folio tr,
+  #winhms-printable-folio .signature-block,
+  #winhms-printable-folio .totals-box {
+    page-break-inside: avoid;
+    break-inside: avoid;
   }
   /* Hide print buttons and controls */
   .print\:hidden {

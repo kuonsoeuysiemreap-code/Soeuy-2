@@ -147,7 +147,7 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
   const [roomChargePostDate, setRoomChargePostDate] = useState<string>('29-Aug-26');
   const [roomChargePostTariff, setRoomChargePostTariff] = useState<number>(40.00);
   const [roomChargePostSplit, setRoomChargePostSplit] = useState<number>(1);
-  const [roomChargePostDesc, setRoomChargePostDesc] = useState<string>('Room Charge - Tariff');
+  const [roomChargePostDesc, setRoomChargePostDesc] = useState<string>('Room Charge');
 
   // Other Charge List State & Catalog
   const [chargeCatalog, setChargeCatalog] = useState<OtherChargeCatalogItem[]>(() => {
@@ -241,13 +241,21 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
     return trimmed;
   };
 
-  // Helper to strip redundant leading date/month from descriptions (e.g. "07Sep • Accommodation Charge" -> "Accommodation Charge")
+  // Helper to strip redundant leading date/month and suffix like "-Tariff" from descriptions (e.g. "Room Charge - Tariff" -> "Room Charge")
   const cleanFolioDescription = (desc: string | undefined): string => {
     if (!desc) return '';
-    return desc
+    let cleaned = desc
       .replace(/^(\d{1,2}[-/ ]?[A-Za-z]{3}(?:[-/ ]?\d{2,4})?|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})(?:[-/ ]*\d+)?\s*[•\-|:]\s*/i, '')
       .replace(/^\d{1,2}[A-Za-z]{3}\s+/i, '')
       .trim();
+
+    // Strip "- Tariff" / "-Tariff" suffix so only "Room Charge" is displayed
+    cleaned = cleaned
+      .replace(/\s*-\s*tariff\b/gi, '')
+      .replace(/\s*\(\s*tariff\s*\)/gi, '')
+      .trim();
+
+    return cleaned;
   };
 
   // Helper to determine if an item is a payment or settlement
@@ -625,13 +633,13 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
     setRoomChargePostDate(defaultDate);
     setRoomChargePostTariff(tariffRate);
     setRoomChargePostSplit(splitTarget);
-    setRoomChargePostDesc('Room Charge - Tariff');
+    setRoomChargePostDesc('Room Charge');
     setShowPostRoomChargeModal(true);
   };
 
   const handlePostRoomChargeSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanDesc = cleanFolioDescription(roomChargePostDesc) || 'Room Charge - Tariff';
+    const cleanDesc = cleanFolioDescription(roomChargePostDesc) || 'Room Charge';
     const newCharge: BillChargeItem = {
       id: `c-user-rm-${currentRoomNum}-${Date.now()}`,
       date: formatFolioDate(roomChargePostDate),
@@ -648,7 +656,7 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
     saveChargesToLocalStorage(updated);
     setShowPostRoomChargeModal(false);
     if (settings.soundEffects) playChime();
-    showToast(`Posted Room Charge from Tariff ($${roomChargePostTariff.toFixed(2)}) to Split ${roomChargePostSplit} by user.`);
+    showToast(`Posted Room Charge ($${roomChargePostTariff.toFixed(2)}) to Split ${roomChargePostSplit} by user.`);
     try {
       window.dispatchEvent(new CustomEvent('pms_folio_updated', { detail: { roomNumber: currentRoomNum } }));
     } catch (err) {}
@@ -660,7 +668,7 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
         return {
           ...c,
           amount: tariffRate,
-          description: c.description.includes('Tariff') ? c.description : `${cleanFolioDescription(c.description)} - Tariff`,
+          description: cleanFolioDescription(c.description) || 'Room Charge',
           tariffRate: tariffRate,
           postedBy: c.postedBy || 'User',
         };
@@ -684,7 +692,7 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
         return {
           ...c,
           amount: tariffRate,
-          description: c.description.includes('Tariff') ? c.description : `${cleanFolioDescription(c.description)} - Tariff`,
+          description: cleanFolioDescription(c.description) || 'Room Charge',
           tariffRate: tariffRate,
         };
       }
@@ -975,16 +983,14 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
       <td class="cell-data" colspan="2">${departureDate}</td>
     </tr>
     <tr>
-      <td class="meta-label">Rate Plan:</td>
-      <td class="cell-data" colspan="2">${ratePlan || 'Regular Tariff'}</td>
       <td class="meta-label">Company:</td>
       <td class="cell-data" colspan="2">${companyName || 'Direct Booking'}</td>
+      <td class="meta-label">Duty Cashier:</td>
+      <td class="cell-data" colspan="2">${currentUser?.username || settings?.managerName || 'PHANIT'}</td>
     </tr>
     <tr>
       <td class="meta-label">Invoice Nº:</td>
-      <td class="cell-data" colspan="2">INV-${currentRoomNum}-${printSplitTarget === 'split2' ? 'SPL2' : 'SPL1'}-0028</td>
-      <td class="meta-label">Duty Cashier:</td>
-      <td class="cell-data" colspan="2">${currentUser?.username || settings?.managerName || 'PHANIT'}</td>
+      <td class="cell-data" colspan="5">INV-${currentRoomNum}-${printSplitTarget === 'split2' ? 'SPL2' : 'SPL1'}-0028</td>
     </tr>
     <tr><td></td></tr>`;
 
@@ -992,7 +998,7 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
     if (targetCharges1.length > 0) {
       html += `
     <tr>
-      <td colspan="6" class="split-banner-1">SPLIT 1: GUEST CHARGES (${currentGuest})</td>
+      <td colspan="6" class="split-banner-1">Guest Charge</td>
     </tr>
     <tr class="table-header">
       <td style="width: 40px;">#</td>
@@ -1010,16 +1016,16 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
       <td class="cell-data" style="text-align: center;">${index + 1}</td>
       <td class="cell-data">${formatFolioDate(item.date)}</td>
       <td class="cell-data">${getFolioParticulars(item)}</td>
-      <td class="cell-num">${!isCredit ? item.amount.toFixed(2) : '0.00'}</td>
-      <td class="cell-credit">${isCredit ? Math.abs(item.amount).toFixed(2) : '0.00'}</td>
-      <td class="cell-num"><b>${item.amount.toFixed(2)}</b></td>
+      <td class="cell-num">${!isCredit ? `$ ${item.amount.toFixed(2)}` : '-'}</td>
+      <td class="cell-credit">${isCredit ? `$ ${Math.abs(item.amount).toFixed(2)}` : '-'}</td>
+      <td class="cell-num"><b>$ ${item.amount.toFixed(2)}</b></td>
     </tr>`;
       });
 
       html += `
     <tr>
       <td colspan="5" class="cell-data" style="text-align: right; font-weight: bold; background-color: #f2f2f2;">Split 1 Subtotal:</td>
-      <td class="cell-num" style="background-color: #f2f2f2; font-weight: bold;">$${total1.toFixed(2)}</td>
+      <td class="cell-num" style="background-color: #f2f2f2; font-weight: bold;">$ ${total1.toFixed(2)}</td>
     </tr>
     <tr><td></td></tr>`;
     }
@@ -1028,7 +1034,7 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
     if (targetCharges2.length > 0) {
       html += `
     <tr>
-      <td colspan="6" class="split-banner-2">SPLIT 2: COMPANY / INCIDENTAL CHARGES (${companyName || 'DIRECT'})</td>
+      <td colspan="6" class="split-banner-1">Guest Charge</td>
     </tr>
     <tr class="table-header">
       <td style="width: 40px;">#</td>
@@ -1046,16 +1052,16 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
       <td class="cell-data" style="text-align: center;">${index + 1}</td>
       <td class="cell-data">${formatFolioDate(item.date)}</td>
       <td class="cell-data">${getFolioParticulars(item)}</td>
-      <td class="cell-num">${!isCredit ? item.amount.toFixed(2) : '0.00'}</td>
-      <td class="cell-credit">${isCredit ? Math.abs(item.amount).toFixed(2) : '0.00'}</td>
-      <td class="cell-num"><b>${item.amount.toFixed(2)}</b></td>
+      <td class="cell-num">${!isCredit ? `$ ${item.amount.toFixed(2)}` : '-'}</td>
+      <td class="cell-credit">${isCredit ? `$ ${Math.abs(item.amount).toFixed(2)}` : '-'}</td>
+      <td class="cell-num"><b>$ ${item.amount.toFixed(2)}</b></td>
     </tr>`;
       });
 
       html += `
     <tr>
       <td colspan="5" class="cell-data" style="text-align: right; font-weight: bold; background-color: #f2f2f2;">Split 2 Subtotal:</td>
-      <td class="cell-num" style="background-color: #f2f2f2; font-weight: bold;">$${total2.toFixed(2)}</td>
+      <td class="cell-num" style="background-color: #f2f2f2; font-weight: bold;">$ ${total2.toFixed(2)}</td>
     </tr>
     <tr><td></td></tr>`;
     }
@@ -1068,11 +1074,11 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
         • Exchange Rate Applied: 1.00 USD = ${exchangeRate.toLocaleString()} KHR<br/>
         • I agree to be held personally liable in the event that the indicated person or company fails to pay for any part of these charges.
       </td>
-      <td colspan="2" class="total-banner" style="text-align: right;">Total Payable (USD):</td>
-      <td class="cell-num total-banner">$${netTotalUSD.toFixed(2)}</td>
+      <td colspan="2" class="total-banner" style="text-align: right;">Total in USD:</td>
+      <td class="cell-num total-banner">$ ${netTotalUSD.toFixed(2)}</td>
     </tr>
     <tr>
-      <td colspan="2" class="khr-banner" style="text-align: right;">Total Equivalent (KHR):</td>
+      <td colspan="2" class="khr-banner" style="text-align: right;">Total in KHR :</td>
       <td class="cell-data khr-banner" style="text-align: right;">៛ ${netTotalKHR.toLocaleString()}</td>
     </tr>
     <tr><td></td></tr>
@@ -3357,11 +3363,12 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
             </div>
 
             {/* Printable Paper Canvas Area */}
-            <div className="flex-1 bg-neutral-200 p-3 sm:p-6 overflow-y-auto">
+            <div className="flex-1 bg-neutral-300/70 p-3 sm:p-6 overflow-y-auto flex justify-center">
               <div 
                 id="winhms-printable-folio"
-                className="bg-white mx-auto max-w-[780px] p-6 sm:p-8 text-neutral-900 border border-neutral-300 shadow-md font-sans space-y-4"
+                className="bg-white mx-auto w-full max-w-[210mm] min-h-[297mm] p-6 sm:p-10 text-neutral-900 border border-neutral-300 shadow-lg font-sans space-y-4 print:p-0 print:m-0 print:border-none print:shadow-none print:w-full print:max-w-none print:min-h-0 box-border flex flex-col justify-between"
               >
+                <div className="space-y-4">
                 
                 {/* 1. Hotel Header */}
                 <div className="border-b-2 border-neutral-900 pb-3 flex flex-wrap items-start justify-between gap-4">
@@ -3420,10 +3427,6 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
                       <strong className="text-neutral-900 font-mono text-xs text-left">{currentRoomNum}</strong>
                     </div>
                     <div className="grid grid-cols-[100px_1fr] items-baseline gap-1">
-                      <span className="text-neutral-500 font-semibold text-left">Rate Plan:</span>
-                      <span className="text-neutral-800 text-left">{ratePlan || 'Regular Tariff'}</span>
-                    </div>
-                    <div className="grid grid-cols-[100px_1fr] items-baseline gap-1">
                       <span className="text-neutral-500 font-semibold text-left">Adults / Pax:</span>
                       <span className="text-neutral-800 text-left">{paxCount} Person(s)</span>
                     </div>
@@ -3456,14 +3459,7 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
                   {(printSplitTarget === 'split1' || printSplitTarget === 'both' || printSplitTarget === 'single') && (
                     <div className="border border-neutral-300">
                       <div className="bg-[#e4ebd9] px-2.5 py-1 font-bold text-neutral-900 text-[11px] flex justify-between items-center border-b border-neutral-300">
-                        <span>
-                          {printSplitTarget === 'both' 
-                            ? `SPLIT 1: GUEST PERSONAL FOLIO (${currentGuest})` 
-                            : printSplitTarget === 'single'
-                              ? `CONSOLIDATED FOLIO CHARGES (${currentGuest})`
-                              : `FOLIO SPLIT 1: GUEST CHARGES`}
-                        </span>
-                        <span className="font-mono">${split1Total.toFixed(2)} USD</span>
+                        <span>Guest Charge</span>
                       </div>
 
                       <table className="w-full text-[10.5px] border-collapse">
@@ -3485,9 +3481,9 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
                                 <td className="py-1 px-2 text-center text-neutral-400 font-mono">{idx + 1}</td>
                                 <td className="py-1 px-2 font-mono text-neutral-700 whitespace-nowrap">{formatFolioDate(item.date)}</td>
                                 <td className="py-1 px-3 text-neutral-900 font-medium">{cleanFolioDescription(item.description)}</td>
-                                <td className="py-1 px-2 text-right font-mono">{!isCredit ? `$${item.amount.toFixed(2)}` : '-'}</td>
-                                <td className="py-1 px-2 text-right font-mono text-red-700">{isCredit ? `$${Math.abs(item.amount).toFixed(2)}` : '-'}</td>
-                                <td className="py-1 px-2 text-right font-mono font-semibold">${item.amount.toFixed(2)}</td>
+                                <td className="py-1 px-2 text-right font-mono">{!isCredit ? `$ ${item.amount.toFixed(2)}` : '-'}</td>
+                                <td className="py-1 px-2 text-right font-mono text-red-700">{isCredit ? `$ ${Math.abs(item.amount).toFixed(2)}` : '-'}</td>
+                                <td className="py-1 px-2 text-right font-mono font-semibold">$ {item.amount.toFixed(2)}</td>
                               </tr>
                             );
                           })}
@@ -3507,12 +3503,7 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
                   {(printSplitTarget === 'split2' || printSplitTarget === 'both') && (
                     <div className="border border-neutral-300">
                       <div className="bg-[#e4ebd9] px-2.5 py-1 font-bold text-neutral-900 text-[11px] flex justify-between items-center border-b border-neutral-300">
-                        <span>
-                          {printSplitTarget === 'both' 
-                            ? `SPLIT 2: COMPANY / INCIDENTAL FOLIO (${companyName || 'DIRECT'})` 
-                            : `FOLIO SPLIT 2: COMPANY / INCIDENTAL CHARGES`}
-                        </span>
-                        <span className="font-mono">${split2Total.toFixed(2)} USD</span>
+                        <span>Guest Charge</span>
                       </div>
 
                       <table className="w-full text-[10.5px] border-collapse">
@@ -3534,9 +3525,9 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
                                 <td className="py-1 px-2 text-center text-neutral-400 font-mono">{idx + 1}</td>
                                 <td className="py-1 px-2 font-mono text-neutral-700 whitespace-nowrap">{formatFolioDate(item.date)}</td>
                                 <td className="py-1 px-3 text-neutral-900 font-medium">{cleanFolioDescription(item.description)}</td>
-                                <td className="py-1 px-2 text-right font-mono">{!isCredit ? `$${item.amount.toFixed(2)}` : '-'}</td>
-                                <td className="py-1 px-2 text-right font-mono text-red-700">{isCredit ? `$${Math.abs(item.amount).toFixed(2)}` : '-'}</td>
-                                <td className="py-1 px-2 text-right font-mono font-semibold">${item.amount.toFixed(2)}</td>
+                                <td className="py-1 px-2 text-right font-mono">{!isCredit ? `$ ${item.amount.toFixed(2)}` : '-'}</td>
+                                <td className="py-1 px-2 text-right font-mono text-red-700">{isCredit ? `$ ${Math.abs(item.amount).toFixed(2)}` : '-'}</td>
+                                <td className="py-1 px-2 text-right font-mono font-semibold">$ {item.amount.toFixed(2)}</td>
                               </tr>
                             );
                           })}
@@ -3566,24 +3557,25 @@ export const BillDetailsModal: React.FC<BillDetailsModalProps> = ({
                   const totalKHR = Math.round(totalPayableUSD * exchangeRate);
 
                   return (
-                    <div className="flex justify-end pt-2">
+                    <div className="flex justify-end pt-2 totals-box">
                       {/* Currency & Amount Totals */}
                       <div className="border border-neutral-300 bg-neutral-50 p-2.5 space-y-1 text-[11px] w-72 sm:w-80">
                         <div className="flex justify-between py-1.5 border-t border-neutral-300 bg-[#ffff99] px-2 font-bold text-neutral-950 text-xs">
-                          <span>Total Payable (USD):</span>
-                          <span className="font-mono font-black">${totalPayableUSD.toFixed(2)} USD</span>
+                          <span>Total in USD:</span>
+                          <span className="font-mono font-black">$ {totalPayableUSD.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between py-1 bg-neutral-200 px-2 font-bold text-neutral-900 text-[11px]">
-                          <span>Equivalent in KHR:</span>
-                          <span className="font-mono">៛ {totalKHR.toLocaleString()} KHR</span>
+                          <span>Total in KHR :</span>
+                          <span className="font-mono">៛ {totalKHR.toLocaleString()}</span>
                         </div>
                       </div>
                     </div>
                   );
                 })()}
+                </div>
 
                 {/* 5. Dual Signature Block */}
-                <div className="grid grid-cols-2 gap-8 pt-8 text-center text-[10.5px]">
+                <div className="grid grid-cols-2 gap-8 pt-8 text-center text-[10.5px] signature-block">
                   <div className="space-y-10">
                     <div className="border-b border-neutral-400 w-3/4 mx-auto"></div>
                     <div className="font-bold text-neutral-800">

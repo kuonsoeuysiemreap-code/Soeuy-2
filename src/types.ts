@@ -29,6 +29,26 @@ export interface FutureReservation {
   extraBed?: boolean;
   extraBedCount?: number;
   vipStatus?: boolean;
+  isUserUpdated?: boolean;
+}
+
+export interface RoomHistoryEntry {
+  id: string;
+  guestName: string;
+  guestEmail?: string;
+  guestPhone?: string;
+  checkInDate: string;
+  checkOutDate: string;
+  checkInTime?: string;
+  checkOutTime?: string;
+  totalAmount?: number;
+  rate?: number;
+  paymentMethod?: PaymentMethod;
+  paymentStatus?: PaymentStatus;
+  status: 'checked_out' | 'cancelled' | 'no_show' | 'completed';
+  notes?: string;
+  folioNumber?: string;
+  checkedOutAt?: string;
 }
 
 export interface Room {
@@ -51,6 +71,7 @@ export interface Room {
   arrivalTime?: string;
   departTime?: string;
   futureReservations?: FutureReservation[];
+  history?: RoomHistoryEntry[];
   amenities: string[];
   notes?: string;
   outOfServiceReason?: string;
@@ -58,6 +79,7 @@ export interface Room {
   bedType: string;
   sizeSqM: number;
   view: string;
+  isUserUpdated?: boolean;
 }
 
 export type TransactionType = 'income' | 'expense' | 'refund';

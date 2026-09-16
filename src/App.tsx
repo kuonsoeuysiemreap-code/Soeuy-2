@@ -589,6 +589,7 @@ export default function App() {
               departTime: data.departTime || r.departTime || '12:00',
               notes: data.notes,
               pricePerNight: data.rate || r.pricePerNight,
+              isUserUpdated: data.isUserUpdated,
             };
           }
 
@@ -616,6 +617,7 @@ export default function App() {
                   extraBed: data.extraBed,
                   vipStatus: data.vipStatus,
                   roomNumber: r.roomNumber,
+                  isUserUpdated: data.isUserUpdated,
                 };
               }
               return fut;
@@ -640,6 +642,7 @@ export default function App() {
                 extraBed: data.extraBed,
                 vipStatus: data.vipStatus,
                 roomNumber: r.roomNumber,
+                isUserUpdated: data.isUserUpdated,
               }
             ];
           }
@@ -804,9 +807,10 @@ export default function App() {
       id: `stay-${occupiedRoom.id}`,
       roomId: occupiedRoom.id,
       roomNumber: occupiedRoom.roomNumber,
-      guestName: occupiedRoom.guestName || 'Mr. SOK ELEONORE',
-      guestEmail: occupiedRoom.guestEmail || 'guest@example.com',
-      guestPhone: occupiedRoom.guestPhone || '(+855) 12 345 678',
+      guestName: occupiedRoom.isUserUpdated ? (occupiedRoom.guestName || '') : '',
+      isUserUpdated: Boolean(occupiedRoom.isUserUpdated),
+      guestEmail: occupiedRoom.guestEmail || '',
+      guestPhone: occupiedRoom.guestPhone || '',
       checkInDate: occupiedRoom.checkInDate || '2026-08-26',
       checkOutDate: occupiedRoom.checkOutDate || '2026-08-29',
       rate: occupiedRoom.pricePerNight,
@@ -888,7 +892,7 @@ export default function App() {
             const newChargeItem: BillChargeItem = {
               id: `c-na-rm-${r.roomNumber}-${auditDateIso.replace(/-/g, '')}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
               date: auditDateFolio,
-              description: 'Room Charge - Tariff',
+              description: 'Room Charge',
               amount: roomTariff,
               splitId: targetSplit || 1,
               category: 'Accommodation',
@@ -1315,7 +1319,8 @@ export default function App() {
             id: `res-${r.id}-${Date.now()}`,
             roomId: r.id,
             roomNumber: r.roomNumber,
-            guestName: initialGuestName || (hasExistingGuest ? (r.guestName || '') : ''),
+            guestName: initialGuestName || (hasExistingGuest && r.isUserUpdated ? (r.guestName || '') : ''),
+            isUserUpdated: Boolean(initialGuestName || (hasExistingGuest && r.isUserUpdated)),
             guestEmail: hasExistingGuest ? (r.guestEmail || '') : '',
             guestPhone: hasExistingGuest ? (r.guestPhone || '') : '',
             checkInDate: r.checkInDate || businessDate || '2026-08-27',

@@ -34,7 +34,7 @@ import {
   Settings as SettingsIcon
 } from 'lucide-react';
 import { Room, UserSettings, PaymentMethod } from '../types';
-import { playChime } from '../utils/helpers';
+import { playChime, getRoomConflictDetail, normalizeToIsoDate } from '../utils/helpers';
 import { ReservationAuditModal, ReservationAuditRecord } from './ReservationAuditModal';
 import { AuthUser } from './PMSActionModals';
 
@@ -76,6 +76,7 @@ export interface ReservationEditData {
   extraBedCount?: number;
   vipStatus?: boolean;
   isCurrentStay?: boolean;
+  isUserUpdated?: boolean;
   title?: string;
   firstName?: string;
   lastName?: string;
@@ -547,24 +548,25 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
     }
   };
 
-  const [title, setTitle] = useState('Ms.');
+  const [title, setTitle] = useState('');
   const [lastName, setLastName] = useState('');
   const [firstName, setFirstName] = useState('');
-  const [guestExpectedStatus, setGuestExpectedStatus] = useState('Expected');
-  const [guestStatus, setGuestStatus] = useState('Cambodian Guest');
-  const [guestType, setGuestType] = useState('Self Booking');
-  const [segment, setSegment] = useState('Transient Discount');
-  const [payMode, setPayMode] = useState('Cash');
-  const [reserveMode, setReserveMode] = useState('Telephone');
-  const [billingInstruction, setBillingInstruction] = useState('Direct Payment');
-  const [businessSource, setBusinessSource] = useState('Self Booking');
+  const [guestExpectedStatus, setGuestExpectedStatus] = useState('');
+  const [guestStatus, setGuestStatus] = useState('');
+  const [guestType, setGuestType] = useState('');
+  const [segment, setSegment] = useState('');
+  const [payMode, setPayMode] = useState('');
+  const [reserveMode, setReserveMode] = useState('');
+  const [billingInstruction, setBillingInstruction] = useState('');
+  const [businessSource, setBusinessSource] = useState('');
   const [member, setMember] = useState('');
-  const [currency, setCurrency] = useState('US DOLLAR');
+  const [currency, setCurrency] = useState('');
   const [skipTariffInRegCard, setSkipTariffInRegCard] = useState(false);
   const [upgrade, setUpgrade] = useState('<None>');
   const [visitPurpose, setVisitPurpose] = useState('');
   const [depositAmount, setDepositAmount] = useState<number>(0.00);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
+  const [conflictError, setConflictError] = useState<string | null>(null);
 
   // Helper to sync advance deposit automatically into Guest Folio & Bill Details
   const syncDepositToGuestFolio = (
@@ -699,11 +701,23 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
       if (reservation) {
         const currentRoom = rooms.find((r) => r.id === reservation.roomId) || rooms.find((r) => r.roomNumber === reservation.roomNumber);
         
-        const rawName = (reservation.guestName || '').trim();
-        if (!rawName || rawName.toUpperCase() === 'LEAKENA') {
-          setLastName('');
-          setFirstName('');
-        } else {
+        // Guest name fields (Title, Last Name, First Name) must remain completely empty unless the user explicitly updated/keyed in a name
+        if (reservation.isUserUpdated && reservation.guestName) {
+          let rawName = (reservation.guestName || '').trim();
+          let extractedTitle = '';
+          
+          const titleMatch = rawName.match(/^(Mr\.|Ms\.|Mrs\.|Dr\.|H\.E\.)\s*/i);
+          if (titleMatch) {
+            extractedTitle = titleMatch[1];
+            if (extractedTitle.toUpperCase() === 'H.E.') {
+              extractedTitle = 'H.E.';
+            } else {
+              extractedTitle = extractedTitle.charAt(0).toUpperCase() + extractedTitle.slice(1).toLowerCase();
+            }
+            rawName = rawName.substring(titleMatch[0].length).trim();
+          }
+
+          setTitle(extractedTitle);
           const nameParts = rawName.split(' ');
           if (nameParts.length > 1) {
             setLastName(nameParts[nameParts.length - 1].toUpperCase());
@@ -712,6 +726,10 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
             setLastName(rawName.toUpperCase());
             setFirstName('');
           }
+        } else {
+          setTitle('');
+          setLastName('');
+          setFirstName('');
         }
 
         setRsrNo(reservation.reservationNumber || reservation.id?.replace(/\D/g, '').slice(-4) || '1213');
@@ -884,6 +902,7 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
         const defaultRate = defaultRoom ? defaultRoom.pricePerNight : 30.00;
         const defaultType = defaultRoom?.type || 'Deluxe Double';
         const defaultTypeCode = defaultType.toLowerCase().includes('twin') ? 'DLT' : 'DLD';
+        setTitle('');
         setLastName('');
         setFirstName('');
         setRsrNo('1213');
@@ -1143,6 +1162,25 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
 
   const handleSave = (keepOpen: boolean = false) => {
     if (!checkCanEdit()) return;
+
+    // Room Role validation: Can’t duplicate reservation in same room and time effect
+    const targetRoomNo = roomRows[0]?.room || reservation?.roomNumber || currentRoom?.roomNumber || '15';
+    const targetRoomObj = rooms.find(r => r.roomNumber === targetRoomNo);
+    const arrivalVal = roomRows[0]?.arrival || reservation?.checkInDate || '22/08/26';
+    const departVal = roomRows[0]?.depart || reservation?.checkOutDate || '23/08/26';
+    const isoIn = normalizeToIsoDate(arrivalVal);
+    const isoOut = normalizeToIsoDate(departVal);
+
+    if (targetRoomObj) {
+      const conflict = getRoomConflictDetail(targetRoomObj, isoIn, isoOut, reservation?.id);
+      if (conflict) {
+        setConflictError(`Room Role Policy Violation: Can’t duplicate reservation in same room and time effect! Room #${targetRoomNo} has a conflicting reservation or active stay for ${conflict.conflictingGuest} (${conflict.checkInDate} to ${conflict.checkOutDate}).`);
+        if (settings.soundEffects) playChime();
+        return;
+      }
+    }
+    setConflictError(null);
+
     const combinedName = `${title} ${lastName} ${firstName}`.trim();
     if (settings.soundEffects) playChime();
 
@@ -1193,6 +1231,7 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
       paymentMethod: payMode as PaymentMethod,
       notes: instructionsReservation,
       vipStatus: guestStatus.toLowerCase().includes('vip'),
+      isUserUpdated: Boolean(lastName.trim() || firstName.trim() || reservation?.isUserUpdated),
       title,
       firstName,
       lastName,
@@ -1484,6 +1523,22 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
 
         </div>
 
+        {conflictError && (
+          <div className="mx-2 my-1.5 p-2 bg-red-100 border border-red-400 text-red-900 rounded text-xs flex items-center justify-between gap-2 animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+              <span className="font-semibold">{conflictError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setConflictError(null)}
+              className="text-red-700 hover:text-red-950 font-bold px-1.5 py-0.5 cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* 3. ROOM & TARIFF DATA GRID */}
         <div 
           className="p-2 overflow-x-auto bg-[#f8fafc]"
@@ -1518,7 +1573,7 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
                   key={row.id} 
                   onClick={() => setSelectedRowIndex(idx)}
                   className={`border-b border-[#e2e8f0] cursor-pointer transition-colors ${
-                    selectedRowIndex === idx ? 'bg-[#fffae6] ring-1 ring-amber-400/50' : 'hover:bg-neutral-50'
+                    selectedRowIndex === idx ? 'bg-[#fffae6]' : 'hover:bg-neutral-50'
                   }`}
                 >
                   <td className="px-1 py-1 border-r border-[#cbd5e1] text-center">
@@ -1537,7 +1592,7 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
                       type="text"
                       value={row.type}
                       onChange={(e) => handleUpdateRoomRow(row.id, 'type', e.target.value)}
-                      className="w-10 h-4 px-0.5 bg-transparent border-b border-dashed border-neutral-400 font-mono text-[10px] font-bold uppercase focus:bg-white focus:outline-none"
+                      className={`w-10 h-4 px-0.5 bg-transparent border-b border-dashed border-neutral-400 font-mono text-[10px] font-bold uppercase focus:bg-white focus:outline-none ${selectedRowIndex === idx ? 'text-amber-800' : ''}`}
                     />
                   </td>
                   
@@ -1838,6 +1893,7 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
                 onChange={(e) => setTitle(e.target.value)}
                 className="h-5 px-1 bg-white border border-neutral-400 rounded-xs text-[11px] font-medium"
               >
+                <option value=""></option>
                 <option value="Ms.">Ms.</option>
                 <option value="Mr.">Mr.</option>
                 <option value="Mrs.">Mrs.</option>
@@ -1850,7 +1906,6 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
                   type="text"
                   value={lastName}
                   onChange={(e) => setLastName(e.target.value)}
-                  placeholder="Last Name"
                   className="w-full h-5 px-1.5 bg-white border border-neutral-400 rounded-xs text-[11px] font-bold text-neutral-900 uppercase focus:outline-none focus:border-blue-600"
                 />
               </div>
@@ -1860,7 +1915,6 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
                   type="text"
                   value={firstName}
                   onChange={(e) => setFirstName(e.target.value)}
-                  placeholder="First"
                   className="w-full h-5 px-1 bg-white border border-neutral-400 rounded-xs text-[11px] text-neutral-900 focus:outline-none focus:border-blue-600"
                 />
               </div>
@@ -1883,6 +1937,7 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
                 onChange={(e) => setGuestExpectedStatus(e.target.value)}
                 className="h-5 px-1 bg-white border border-neutral-400 rounded-xs text-[10px]"
               >
+                <option value=""></option>
                 <option value="Expected">Expected</option>
                 <option value="Checked In">Checked In</option>
                 <option value="Checked Out">Checked Out</option>
@@ -1907,6 +1962,7 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
                     onChange={(e) => setGuestStatus(e.target.value)}
                     className="flex-1 min-w-0 h-5 px-1 bg-white border border-neutral-400 rounded-xs text-[10px] truncate"
                   >
+                    <option value=""></option>
                     {guestStatusOptions.map(opt => (
                       <option key={opt} value={opt}>{opt}</option>
                     ))}
@@ -1927,6 +1983,7 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
                     onChange={(e) => setReserveMode(e.target.value)}
                     className="flex-1 min-w-0 h-5 px-1 bg-white border border-neutral-400 rounded-xs text-[10px] truncate"
                   >
+                    <option value=""></option>
                     {reserveModeOptions.map(opt => (
                       <option key={opt} value={opt}>{opt}</option>
                     ))}
@@ -1951,6 +2008,7 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
                     onChange={(e) => setGuestType(e.target.value)}
                     className="flex-1 min-w-0 h-5 px-1 bg-white border border-neutral-400 rounded-xs text-[10px] truncate"
                   >
+                    <option value=""></option>
                     {guestTypeOptions.map(opt => (
                       <option key={opt} value={opt}>{opt}</option>
                     ))}
@@ -1971,6 +2029,7 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
                     onChange={(e) => setBillingInstruction(e.target.value)}
                     className="flex-1 min-w-0 h-5 px-1 bg-white border border-neutral-400 rounded-xs text-[10px] truncate"
                   >
+                    <option value=""></option>
                     {billingInstructionOptions.map(opt => (
                       <option key={opt} value={opt}>{opt}</option>
                     ))}
@@ -1995,6 +2054,7 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
                     onChange={(e) => setSegment(e.target.value)}
                     className="flex-1 min-w-0 h-5 px-1 bg-white border border-neutral-400 rounded-xs text-[10px] truncate"
                   >
+                    <option value=""></option>
                     {segmentOptions.map(opt => (
                       <option key={opt} value={opt}>{opt}</option>
                     ))}
@@ -2015,6 +2075,7 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
                     onChange={(e) => setBusinessSource(e.target.value)}
                     className="flex-1 min-w-0 h-5 px-1 bg-white border border-neutral-400 rounded-xs text-[10px] truncate"
                   >
+                    <option value=""></option>
                     {businessSourceOptions.map(opt => (
                       <option key={opt} value={opt}>{opt}</option>
                     ))}
@@ -2039,6 +2100,7 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
                     onChange={(e) => setPayMode(e.target.value)}
                     className="flex-1 min-w-0 h-5 px-1 bg-white border border-neutral-400 rounded-xs text-[10px] truncate"
                   >
+                    <option value=""></option>
                     {payModeOptions.map(opt => (
                       <option key={opt} value={opt}>{opt}</option>
                     ))}
@@ -2324,6 +2386,12 @@ export const EditReservationModal: React.FC<EditReservationModalProps> = ({
           </div>
 
           <div className="flex items-center gap-1.5">
+            {conflictError && (
+              <div className="flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-900 border border-red-400 rounded text-[9.5px] font-bold animate-in fade-in mr-1">
+                <AlertTriangle className="w-3 h-3 text-red-600" />
+                <span>Can't Duplicate: Overlap Conflict</span>
+              </div>
+            )}
             {saveNotice && (
               <div className="flex items-center gap-1 px-2 py-0.5 bg-emerald-100 text-emerald-900 border border-emerald-300 rounded text-[9.5px] font-semibold animate-in fade-in mr-1">
                 <Check className="w-3 h-3 text-emerald-600" />
